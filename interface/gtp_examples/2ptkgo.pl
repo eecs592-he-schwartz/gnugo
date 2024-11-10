@@ -26,6 +26,8 @@
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 use Tk;
+use File::Basename;
+use lib dirname (__FILE__);
 use ttgo;
 use FileHandle;
 use IPC::Open2;
