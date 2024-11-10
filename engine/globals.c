@@ -178,3 +178,6 @@ float territorial_weight    = 1.0;
 float strategical_weight    = 1.0;
 float attack_dragon_weight  = 1.0;
 float followup_weight       = 1.0;
+
+int meaningless_black_moves[BOARDMAX];
+int meaningless_white_moves[BOARDMAX];
