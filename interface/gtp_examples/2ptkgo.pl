@@ -125,7 +125,7 @@ my $geox = ($boardsize-1) * $sqwh + 80;
 my $geoy = ($boardsize-1) * $sqwh + 140;
 
 $top->geometry( $geox . 'x' . $geoy );
-$top->configure( background => $bkc );
+#$top->configure( background => $bkc );
 
 
 
