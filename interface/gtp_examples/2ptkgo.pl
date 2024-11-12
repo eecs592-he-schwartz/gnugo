@@ -31,30 +31,36 @@ use lib dirname (__FILE__);
 use ttgo;
 use FileHandle;
 use IPC::Open2;
+use File::Temp qw(tempfile);
 
 # use strict;
 
 $| = 1;
 
-my $boardsize = 11;
+my $boardsize = 19;
 
 my $autoplay = 1;
 
 my @program = ();
 my @cur_id = ();
 
+my @score;
 
 my $Aprg_in = new FileHandle;
 my $Aprg_out = new FileHandle;
-$program[0] = 'gnugo --mode gtp --quiet';
+#$program[0] = 'gnugo --mode gtp --score aftermath --capture-all-dead --chinese-rules --quiet --komi 6.5 -o black.sgf';
+#$program[0] = 'fuego --quiet';
+$program[0] = $ARGV[0] // die "usage: $0 program_0_cmd program_1_cmd sgfout";
 $cur_id[0] = 1;   # starting id
 
 
 my $Bprg_in = new FileHandle;
 my $Bprg_out = new FileHandle;
-$program[1] = 'gnugo --mode gtp --score aftermath --capture-all-dead --chinese-rules --quiet';
+#$program[1] = 'gnugo --mode gtp --score aftermath --capture-all-dead --chinese-rules --quiet --komi 6.5 -o white.sgf';
+$program[1] = $ARGV[1] // die "usage: $0 program_0_cmd program_1_cmd sgfout";
 $cur_id[1] = 1;   # starting id
 
+my $sgfout = $ARGV[2] // die "usage: $0 program_0_cmd program_1_cmd sgfout";
 
 my $state = 'start';    # first initialization state
 
@@ -372,7 +378,7 @@ sub drop_stone
 
 
 
-# This routine is called after each message is recieved
+# This routine is called after each message is received
 # -----------------------------------------------------
 
 # How the control loop works:
@@ -412,7 +418,7 @@ sub  control
     }
 
     if ( $state eq 'genmove_black' ) {
-	snd( 0, "$cur_id[0] genmove_black" );
+	snd( 0, "$cur_id[0] genmove black" );
 	$state = 'black';
 	return;
     }
@@ -429,7 +435,13 @@ sub  control
 	if ( $msg =~ /PASS/ ) {
 	    $consecutive_passes++;
 	    $gn = 'PASS';
-	} else {
+        }
+        elsif($msg =~ /resign/i){
+            snd(1, "$cur_id[1] version");
+            $state = 'gameover';
+            return;
+        }
+	else {
 	    $consecutive_passes = 0;
 	    $y = $boardsize - $2;
 	    $x = $toix{$1};
@@ -448,7 +460,7 @@ sub  control
 
 	# send the move along to WHITE
 	# ----------------------------
-	snd( 1, "$cur_id[1] black $gn" );
+	snd( 1, "$cur_id[1] play black $gn" );
 	$state = 'genmove_white';
 
 	if ($consecutive_passes == 2) {
@@ -460,7 +472,7 @@ sub  control
 
 
     if ( $state eq 'genmove_white' ) {
-	snd( 1, "$cur_id[1] genmove_white" );
+	snd( 1, "$cur_id[1] genmove white" );
 	$state = 'white';
 	return;
     }
@@ -478,7 +490,13 @@ sub  control
 	if ( $msg =~ /PASS/ ) {
 	    $consecutive_passes++;
 	    $gn = 'PASS';
-	} else {
+        }
+        elsif($msg =~ /resign/i){
+            snd(0, "$cur_id[0] version");
+            $state = 'gameover';
+            return;
+        }
+	else {
 	    $consecutive_passes = 0;
 	    $y = $boardsize - $2;
 	    $x = $toix{$1};
@@ -497,7 +515,7 @@ sub  control
 
 	# send the move along to BLACK
 	# ----------------------------
-	snd( 0, "$cur_id[0] white $gn" );
+	snd( 0, "$cur_id[0] play white $gn" );
 	$state = 'genmove_black';
 
 	if ($consecutive_passes == 2) {
@@ -510,14 +528,79 @@ sub  control
 
     if ( $state eq 'gameover' ) {    
 	print "Game Over\n";
+	print "ttScore:\n";
 	ttScore();
-
+        snd(0, "$cur_id[0] final_score");
+        $state = 'score black';
+        return;
     }
 
+    my $score_re = qr/((?:B|W)(?:\+|-)\d+(?:\.\d+)?)/;
+    my $savesgf = sub{
+        ($_) = @_;
+        if(/fuego/i){
+            return 'savesgf';
+        }
+        elsif(/gnugo/i){
+            return 'printsgf';
+        }
+        elsif(/katago/i){
+            die "TODO";
+        }
+        else{
+            die;
+        }
+    };
 
-
-
-
+    # this is a mess, but when the game is over, we want to
+    # - ask each engine what it thinks the score is
+    # - if they agree, save each sgf and check that they match
+    # - gracefully quit each engine, although there's probably no need to
+    if($state eq 'score black'){
+	print "black final_score:\n";
+        print "$msg\n";
+        $msg =~ /$score_re/ or die;
+        $score[0] = $1;
+        snd(1, "$cur_id[1] final_score");
+        $state = 'score white';
+        return;
+    }
+    if($state eq 'score white'){
+	print "white final_score:\n";
+        print "$msg\n";
+        $msg =~ /$score_re/ or die;
+        $score[1] = $1;
+        # check that scores match and print final result
+        $score[0] eq $score[1] or die "$score[0] <-> $score[1]";
+        $score = $score[0];
+        our $sgfA = File::Temp->new();
+        snd(0, "$cur_id[0] ${\(&$savesgf($program[0]))} $sgfA");
+        $state = 'save black sgf';
+        return;
+    }
+    if($state eq 'save black sgf'){
+        our $sgfB = File::Temp->new();
+        snd(1, "$cur_id[1] ${\(&$savesgf($program[1]))} $sgfB");
+        $state = 'save white sgf';
+        return;
+    }
+    if($state eq 'save white sgf'){
+        # TODO: check that the sgfs are the same game
+        # for now, just pick the black board
+        snd(0, "$cur_id[0] quit");
+        $state = 'black quit engine';
+        return;
+    }
+    if($state eq 'black quit engine'){
+        snd(1, "$cur_id[1] quit");
+        $state = 'white quit engine';
+    }
+    if($state eq 'white quit engine'){
+        sleep(1);
+        print "final score: $score\n";
+        system('cp', "$sgfA", "$sgfout.$score.sgf");
+        exit 0;
+    }
 
 }
 
