@@ -22,20 +22,28 @@ my %engine2resources = (
     #katago => 'TODO',
 );
 my @engines = qw(fuego gnugo);
-my $engineVengine = './2ptkgo.pl';
+# since we're typically running these overnight/for long durations, want to run
+# 2ptkgo.pl headlessly. But 2ptkgo.pl relies on the perl/Tk main event loop
+# (waiting for engine output events), so let's just use xvfb to fake a display
+my @engineVengine = qw(xvfb-run ./2ptkgo.pl);
 my $output_dir = $ARGV[0] // die "usage: $0 output_dir";
 sub free{
     $_ = `free -g | sed -n '2p' | awk '{print \$4}'`;
     chomp;
     return $_;
 };
-my $num_threads_using;
 my $shm = IPC::SharedMem->new(IPC_PRIVATE, 8, S_IRWXU);
 $shm->write(pack('q', 0), 0, 8);
-$num_threads_using = $shm->read(0, 8);
-$num_threads_using = unpack('q', $num_threads_using);
 my $sem = IPC::Semaphore->new(IPC_PRIVATE, 1, S_IRUSR | S_IWUSR | IPC_CREAT);
-$sem->op(0, 1, 0);
+$sem->setval(0, 1); # initialize the lock to free
+sub get_num_threads_using{
+    my $num_threads_using = $shm->read(0, 8);
+    $num_threads_using = unpack('q', $num_threads_using);
+    return $num_threads_using;
+};
+sub set_num_threads_using{
+    $shm->write(pack('q', $_[0]), 0, 8);
+};
 
 # get every pair of engines, order matters, including self-self
 my $cartesian_product = sub{
@@ -67,24 +75,26 @@ while(@jobs){
     my ($white_mem, $white_cpu) = @{$engine2resources{$job->[1]}};
     #say free();
     #say $black_mem + $white_mem;
-    #say $num_threads_using + $black_cpu + $white_cpu;
-    while(free() < ($black_mem + $white_mem) || ($num_threads_using + $black_cpu + $white_cpu) > 64){
-        sleep(10); # busy wait
+    #say $num_threads_using;
+    #say $black_cpu + $white_cpu;
+    $sem->op(0, -1, 0);
+    my $num_threads_using = get_num_threads_using();
+    $sem->op(0, 1, 0);
+    if(free() < ($black_mem + $white_mem) ||
+        ($num_threads_using + ($black_cpu + $white_cpu)) > 64){
+        push @jobs, $job;
+        sleep(2); # busy wait
+        next;
     }
     $sem->op(0, -1, 0);
-    $num_threads_using = $shm->read(0, 8);
-    $num_threads_using = unpack('q', $num_threads_using);
-    $num_threads_using = $num_threads_using + $black_cpu + $white_cpu;
-    $shm->write(pack('q', $num_threads_using), 0, 8);
+    set_num_threads_using(get_num_threads_using() + ($black_cpu + $white_cpu));
     $sem->op(0, 1, 0);
-    my $pid = fork() // die "fork failed: $!";
-    if($pid){
-        system($engineVengine, $engine2cmd{$job->[0]}, $engine2cmd{$job->[1]}, $job->[2]);
+    if((fork() // die "fork failed: $!") == 0){
+        #open(STDOUT, '>', '/dev/null');
+        #open(STDERR, '>', '/dev/null');
+        system(@engineVengine, $engine2cmd{$job->[0]}, $engine2cmd{$job->[1]}, $job->[2]);
         $sem->op(0, -1, 0);
-        $num_threads_using = $shm->read(0, 8);
-        $num_threads_using = unpack('q', $num_threads_using);
-        $num_threads_using = $num_threads_using - $black_cpu - $white_cpu;
-        $shm->write(pack('q', $num_threads_using), 0, 8);
+        set_num_threads_using(get_num_threads_using() - ($black_cpu + $white_cpu));
         $sem->op(0, 1, 0);
         exit 0;
     }
