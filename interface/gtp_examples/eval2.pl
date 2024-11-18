@@ -25,7 +25,7 @@ my @engines = qw(fuego gnugo);
 # since we're typically running these overnight/for long durations, want to run
 # 2ptkgo.pl headlessly. But 2ptkgo.pl relies on the perl/Tk main event loop
 # (waiting for engine output events), so let's just use xvfb to fake a display
-my @engineVengine = qw(xvfb-run ./2ptkgo.pl);
+my @engineVengine = qw(xvfb-run -a ./2ptkgo.pl);
 my $output_dir = $ARGV[0] // die "usage: $0 output_dir";
 sub free{
     $_ = `free -g | sed -n '2p' | awk '{print \$4}'`;

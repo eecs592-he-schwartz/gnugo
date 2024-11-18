@@ -29,6 +29,7 @@ package ttgo;
 require Exporter;
 
 use strict;
+no warnings 'recursion';
 
 
 our @ISA    = qw(Exporter);
