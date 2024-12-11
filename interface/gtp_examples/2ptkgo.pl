@@ -63,6 +63,7 @@ $cur_id[1] = 1;   # starting id
 my $sgfout = $ARGV[2] // die "usage: $0 program_0_cmd program_1_cmd sgfout";
 
 my $state = 'start';    # first initialization state
+my $resigned; # undef, 0, 1 : no one, black, white resigned
 
 open2($Aprg_out, $Aprg_in, $program[0]);
 $flags = 
@@ -286,7 +287,7 @@ sub getmessage
     if (defined $tmpstr) {
 	chomp($tmpstr);
 
-	if ($tmpstr eq '') {   # eat the line, update id
+	if ($tmpstr =~ /^\s*$/) {   # eat the line, update id
 	    $cur_id[$pi] ++; 
 	    control( $msgstr );
 	}  else {
@@ -400,6 +401,11 @@ sub  control
     # white               (prgA)
     # goto                xxx
     
+    # NOTE: need to trigger another fileevent to proceed to gameover,
+    # but haven't checked that the version isn't inadvertently used
+    my $noop_to_next_state = sub { # takes 0 or 1 for black or white
+        snd($_[0], "$cur_id[$_[0]] version");
+    };
 
     if (defined $msg) {
 	print STDERR "state/msg = $state $msg\n";
@@ -430,15 +436,18 @@ sub  control
 
 	print "msg ---> $msg\n";
 
-	$msg =~ /^=\d+\s+(.)(.*)/;    # parse out move components
+	$msg =~ /^=(?:\d+)?\s+(.)(.*)/;    # parse out move components
 
 	if ( $msg =~ /PASS/ ) {
 	    $consecutive_passes++;
 	    $gn = 'PASS';
         }
         elsif($msg =~ /resign/i){
+            # NOTE: need to trigger another fileevent to proceed to gameover,
+            # but haven't checked that the version isn't inadvertently used
             snd(1, "$cur_id[1] version");
             $state = 'gameover';
+            $resigned = 0;
             return;
         }
 	else {
@@ -485,15 +494,18 @@ sub  control
 
 	print "msg ---> $msg\n";
 
-	$msg =~ /^=\d+\s+(.)(.*)/;    # parse out move components
+	$msg =~ /^=(?:\d+)?\s+(.)(.*)/;    # parse out move components
 
 	if ( $msg =~ /PASS/ ) {
 	    $consecutive_passes++;
 	    $gn = 'PASS';
         }
         elsif($msg =~ /resign/i){
+            # NOTE: need to trigger another fileevent to proceed to gameover,
+            # but haven't checked that the version isn't inadvertently used
             snd(0, "$cur_id[0] version");
             $state = 'gameover';
+            $resigned = 1;
             return;
         }
 	else {
@@ -527,11 +539,17 @@ sub  control
 
 
     if ( $state eq 'gameover' ) {    
-	print "Game Over\n";
-	print "ttScore:\n";
-	ttScore();
-        snd(0, "$cur_id[0] final_score");
-        $state = 'score black';
+        print "Game Over\n";
+        if(defined $resigned){
+            snd(0, "$cur_id[0] version");
+            $state = 'save black sgf';
+        }
+        else{
+            print "ttScore:\n";
+            ttScore();
+            snd(0, "$cur_id[0] final_score");
+            $state = 'score black';
+        }
         return;
     }
 
@@ -612,6 +630,10 @@ sub snd
 {
     my ($who, $str) = @_;
 
+    # mogor does not support command ids
+    # remove the command id "at the last moment", to keep the interface the
+    # same for everyone else
+    $str =~ s/^\S+\s+// if $program[$who] =~ /mogo/i;
     if ($who == 0) {
 	print $Aprg_in "$str\n";
     } else {

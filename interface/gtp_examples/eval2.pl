@@ -21,12 +21,13 @@ my %engine2resources = (
     gnugo => [1, 1],
     #katago => 'TODO',
 );
-my @engines = qw(fuego gnugo);
+my @engines = qw(fuego);
 # since we're typically running these overnight/for long durations, want to run
 # 2ptkgo.pl headlessly. But 2ptkgo.pl relies on the perl/Tk main event loop
 # (waiting for engine output events), so let's just use xvfb to fake a display
-my @engineVengine = qw(xvfb-run -a ./2ptkgo.pl);
+my @engineVengine = qw(xvfb-run -a ./fuegoBlackRaveWeightvsFuegoWhite.pl);
 my $output_dir = $ARGV[0] // die "usage: $0 output_dir";
+my $counter = 0;
 sub free{
     $_ = `free -g | sed -n '2p' | awk '{print \$4}'`;
     chomp;
@@ -92,7 +93,7 @@ while(@jobs){
     if((fork() // die "fork failed: $!") == 0){
         #open(STDOUT, '>', '/dev/null');
         #open(STDERR, '>', '/dev/null');
-        system(@engineVengine, $engine2cmd{$job->[0]}, $engine2cmd{$job->[1]}, $job->[2]);
+        system(@engineVengine, "$output_dir/" . $counter++);
         $sem->op(0, -1, 0);
         set_num_threads_using(get_num_threads_using() - ($black_cpu + $white_cpu));
         $sem->op(0, 1, 0);
